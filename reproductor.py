@@ -6,10 +6,11 @@ import threading
 import utils
 import time
 
+# --- REPRODUCTOR DE AUDIO ---
 class musicPlayer:
     def __init__(self, master):
         self.master = master
-        self.master.title("Reproductor Multimedia")
+        self.master.title("Reproductor de música")
 
         # --- FRAME (CONTENEDOR) PRINCIPAL DE CONTROLES ---
         controlsFrame = tk.Frame(master)
@@ -200,8 +201,34 @@ class musicPlayer:
             self.progress.set(seconds)
             self.currentTimeLabel.config(text=self._formatTime(seconds))
     
+# --- REPRODUCTOR DE VIDEO ---
+class videoPlayer:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("Reproductor de Video")
+        
 
+# --- MENÚ PRINCIPAL ---
+class mainApp:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("Reproductor Multimedia")
+
+        self.audioButton = tk.Button(master, text="Reproductor de Audio", width=20, height=2, command=self.openMusicPlayer)
+        self.audioButton.pack(pady=20, padx=40)
+
+        self.videoButton = tk.Button(master, text="Reproductor de Video", width=20, height=2, command=self.openVideoPlayer)
+        self.videoButton.pack(pady=20, padx=40)
+
+    def openMusicPlayer(self):
+        self.newWindow = tk.Toplevel(self.master)
+        self.app = musicPlayer(self.newWindow)
+
+    def openVideoPlayer(self):
+        self.newWindow = tk.Toplevel(self.master)
+        self.app = videoPlayer(self.newWindow)
+        
 if __name__ == "__main__":
     root = tk.Tk()
-    app = musicPlayer(root)
+    app = mainApp(root)
     root.mainloop()
