@@ -1,2 +1,2 @@
-# Ignoring large executable files
+# Ignoring large executable files so the project can be pushed to GitHub (100mb limit)
 *.exe
