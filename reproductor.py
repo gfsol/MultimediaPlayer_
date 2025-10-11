@@ -4,122 +4,204 @@ import pyaudio
 import wave
 import threading
 import utils
+import time
 
-class Reproductor:
-    import tkinter as tk
-from tkinter import ttk
-
-class Reproductor:
+class musicPlayer:
     def __init__(self, master):
         self.master = master
-        self.master.title("🎵 Reproductor Multimedia")
-        self.master.geometry("400x300")
-        self.master.configure(bg="#1e1e1e")  # Fondo oscuro elegante
+        self.master.title("Reproductor Multimedia")
 
-        # 🎧 Título principal
-        self.title_label = tk.Label(
-            master,
-            text="Reproductor Multimedia",
-            font=("Segoe UI", 16, "bold"),
-            bg="#1e1e1e",
-            fg="#00bcd4"
-        )
-        self.title_label.pack(pady=20)
+        # --- FRAME (CONTENEDOR) PRINCIPAL DE CONTROLES ---
+        controlsFrame = tk.Frame(master)
+        controlsFrame.pack(pady=10)
 
-        # 🎶 Frame para los botones
-        button_frame = tk.Frame(master, bg="#1e1e1e")
-        button_frame.pack(pady=20)
+        self.playButton = tk.Button(controlsFrame, text="▶ Reproducir", width=12, command=self.playAudio, state="disabled")
+        self.playButton.grid(row=0, column=0, padx=5)
 
-        # Botones principales con estilo coherente
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure(
-            "TButton",
-            font=("Segoe UI", 11),
-            padding=6,
-            background="#00bcd4",
-            foreground="white",
-            borderwidth=0
-        )
-        style.map(
-            "TButton",
-            background=[("active", "#0097a7")]
-        )
+        self.pauseButton = tk.Button(controlsFrame, text="⏸ Pausar", width=12, command=self.pauseAudio, state="disabled")
+        self.pauseButton.grid(row=0, column=1, padx=5)
 
-        self.play_button = ttk.Button(button_frame, text="▶ Reproducir", command=self.play_audio)
-        self.play_button.grid(row=0, column=0, padx=10)
+        self.stopButton = tk.Button(controlsFrame, text="⏹ Detener", width=12, command=self.stopAudio, state="disabled")
+        self.stopButton.grid(row=0, column=2, padx=5)
 
-        self.stop_button = ttk.Button(button_frame, text="⏹ Detener", command=self.stop_audio)
-        self.stop_button.grid(row=0, column=1, padx=10)
+        self.loadButton = tk.Button(controlsFrame, text="📂 Cargar Archivo", width=15, command=self.loadFile)
+        self.loadButton.grid(row=0, column=3, padx=5)
 
-        self.load_button = ttk.Button(button_frame, text="📂 Cargar Archivo", command=self.load_file)
-        self.load_button.grid(row=0, column=2, padx=10)
+        # --- BARRA DE PROGRESO ---
+        self.progress = tk.Scale(master, from_=0, to=0, orient="horizontal",
+                                 length=400, showvalue=0, command=self.updatePosAudio)
+        self.progress.pack(pady=(10, 0))
 
-        # 🎵 Estado actual
-        self.status_label = tk.Label(
-            master,
-            text="No se ha cargado ningún archivo",
-            font=("Segoe UI", 10),
-            bg="#1e1e1e",
-            fg="#cccccc"
-        )
-        self.status_label.pack(pady=10)
+        # --- TIEMPOS ---
+        self.timeFrame = tk.Frame(master)
+        self.timeFrame.pack(fill="x", padx=20)
 
-        # 🎚️ Barra de progreso (opcional)
-        self.progress = ttk.Progressbar(master, orient="horizontal", length=300, mode="determinate")
-        self.progress.pack(pady=10)
+        self.currentTimeLabel = tk.Label(self.timeFrame, text="0:00")
+        self.currentTimeLabel.pack(side="left")
 
-        # Variables internas
-        self.audio_thread = None
-        self.is_playing = False
-        self.audio_file = None
+        self.totalTimeLabel = tk.Label(self.timeFrame, text="0:00")
+        self.totalTimeLabel.pack(side="right")
 
+        # --- "REPRODUCIENDO AHORA" ---
+        self.nowPlayingLabel = tk.Label(master, text="", font=("Arial", 10, "italic"), fg="green")
+        self.nowPlayingLabel.pack(pady=5)
 
-    def load_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Archivos de audio", "*.mp3 *.wav")])
-        if file_path:
-            if file_path.endswith('.mp3'):
-                wav_path = file_path.rsplit('.', 1)[0] + '.wav'
-                utils.mp3_to_wav(file_path, wav_path)
-                self.audio_file = wav_path
+        # --- VARIABLES INTERNAS ---
+        self.audioThread = None
+        self.isPlaying = False
+        self.isPaused = False
+        self.audioFile = None
+        self.currentPos = 0
+        self.totalFrames = 0
+        self.frameRate = 0
+        self.duration = 0
+        self.sliderChange = None
+        self.updatingProgress = False
+
+    # --- MÉTODOS ---
+    # Cargar archivo de audio
+    def loadFile(self):
+        filePath = filedialog.askopenfilename(filetypes=[("Archivos de audio", "*.mp3 *.wav")])
+        if filePath:
+            if filePath.endswith('.mp3'):
+                wavPath = filePath.rsplit('.', 1)[0] + '.wav'
+                utils.mp3_to_wav(filePath, wavPath)
+                self.audioFile = wavPath
             else:
-                self.audio_file = file_path
+                self.audioFile = filePath
 
-    def play_audio(self):
-        if self.audio_file and not self.is_playing:
-            self.is_playing = True
-            self.audio_thread = threading.Thread(target=self._play)
-            self.audio_thread.start()
+            waveFile = wave.open(self.audioFile, 'rb')
+            self.totalFrames = waveFile.getnframes()
+            self.frameRate = waveFile.getframerate()
+            self.duration = self.totalFrames / self.frameRate
+            waveFile.close()
 
-    def _play(self):
+            self.progress.config(from_=0, to=int(self.duration), resolution=0.1)
+            self.progress.set(0)
+            self.totalTimeLabel.config(text=self._formatTime(self.duration))
+            self.currentTimeLabel.config(text="0:00")
+            self.nowPlayingLabel.config(text="Archivo cargado: " + self.audioFile.split('/')[-1])
+
+            self.playButton.config(state="normal")
+            self.stopButton.config(state="disabled")
+            self.pauseButton.config(state="disabled")
+            self.playButton.config(state="normal")
+    # Reproducir audio
+    def playAudio(self):
+        if self.audioFile and not self.isPlaying:
+            self.isPlaying = True
+            self.isPaused = False
+            self.playButton.config(state="disabled")
+            self.pauseButton.config(state="normal")
+            self.stopButton.config(state="normal")
+
+            fileName = self.audioFile.split("/")[-1].split(".")[0]
+            self.nowPlayingLabel.config(text=f"Reproduciendo: {fileName}")
+
+            self.audioThread = threading.Thread(target=self._playAudio, daemon=True)
+            self.audioThread.start()
+        elif self.isPaused:
+            self.isPaused = False
+    # Pausar audio
+    def pauseAudio(self):
+        if self.isPlaying:
+            self.isPaused = not self.isPaused
+            if self.isPaused:
+                self.pauseButton.config(text="▶ Reanudar")
+            else:
+                self.pauseButton.config(text="⏸ Pausar")
+    # Método para detener la reproducción
+    def stopAudio(self):
+        if self.isPlaying:
+            self.isPlaying = False
+            self.isPaused = False
+            self.progress.set(0)
+            self.currentTimeLabel.config(text="0:00")
+            self.nowPlayingLabel.config(text="")
+            self.playButton.config(state="normal")
+            self.pauseButton.config(state="disabled", text="⏸ Pausar")
+            self.stopButton.config(state="disabled")
+    # Método para controlar la reproducción del audio
+    def _playAudio(self):
         chunk = 1024
-        wf = wave.open(self.audio_file, 'rb')
-        p = pyaudio.PyAudio()
+        waveFile = wave.open(self.audioFile, 'rb')
+        pAud = pyaudio.PyAudio()
+
+        # Configuración del audio
+        stream = pAud.open(format=pAud.get_format_from_width(waveFile.getsampwidth()),
+                           channels=waveFile.getnchannels(),
+                           rate=waveFile.getframerate(),
+                           output=True)
         
-        stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                        channels=wf.getnchannels(),
-                        rate=wf.getframerate(),
-                        output=True)
-        
-        data = wf.readframes(chunk)
-        
-        while data and self.is_playing:
+        # Posicionar en el frame correcto si se movió el slider
+        if self.sliderChange is not None:
+            newFrame = int(self.sliderChange * self.frameRate)
+            waveFile.setpos(newFrame)
+            self.currentPos = newFrame
+            self.sliderChange = None
+        else:
+            self.currentPos = 0
+        # Leer datos
+        data = waveFile.readframes(chunk)
+        threading.Thread(target=self._updateSlider, daemon=True).start()
+
+        while data and self.isPlaying:
+            if self.isPaused:
+                time.sleep(0.1)
+                continue
+
+            if self.sliderChange is not None:
+                newFrame = int(self.sliderChange * self.frameRate)
+                waveFile.setpos(newFrame)
+                self.currentPos = newFrame
+                self.sliderChange = None
+                data = waveFile.readframes(chunk)
+                continue
+
             stream.write(data)
-            data = wf.readframes(chunk)
-        
+            self.currentPos = waveFile.tell()
+            data = waveFile.readframes(chunk)
+
         stream.stop_stream()
         stream.close()
-        p.terminate()
-        wf.close()
-        self.is_playing = False
+        pAud.terminate()
+        waveFile.close()
+        self.isPlaying = False
+        self.updatingProgress = False
+        self.progress.set(0)
+        self.currentTimeLabel.config(text="0:00")
+        self.nowPlayingLabel.config(text="")
+        self.playButton.config(state="normal")
+        self.pauseButton.config(state="disabled", text="⏸ Pausar")
+        self.stopButton.config(state="disabled")
+    # Método para actualizar el slider
+    def _updateSlider(self):
+        self.updatingProgress = True
+        while self.isPlaying and self.updatingProgress:
+            if not self.isPaused:
+                currentTime = self.currentPos / self.frameRate
+                self.progress.set(currentTime)
+                self.currentTimeLabel.config(text=self._formatTime(currentTime))
+            time.sleep(0.2)
+        self.updatingProgress = False
+    # Método para darle formato correcto al tiempo
+    def _formatTime(self, seconds):
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m}:{s:02}"
+    # Método para actualizar la posición del audio al mover el slider
+    def updatePosAudio(self, value):
+        if not self.audioFile:
+            return
+        seconds = float(value)
+        if self.isPlaying:
+            self.sliderChange = seconds
+        else:
+            self.progress.set(seconds)
+            self.currentTimeLabel.config(text=self._formatTime(seconds))
+    
 
-    def stop_audio(self):
-        if self.is_playing:
-            self.is_playing = False
-            if self.audio_thread:
-                self.audio_thread.join()
-                
 if __name__ == "__main__":
     root = tk.Tk()
-    app = Reproductor(root)
+    app = musicPlayer(root)
     root.mainloop()
