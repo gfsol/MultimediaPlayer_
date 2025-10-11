@@ -31,7 +31,8 @@ This project is a **Multimedia Player** developed for the **Multimedia Laborator
 
 ```bash
 pip install pyaudio
-
+exit
 4. Run the python script:
 ```bash
 python reproductor.py
+exit
