@@ -39,9 +39,6 @@ You must have:
 - **VLC Media Player** installed on your system  
 - `python-vlc` correctly linked to that installation
 
-
-> **Note:** FFmpeg is not required; VLC handles all media playback.
-
 ---
 
 ## Installation
