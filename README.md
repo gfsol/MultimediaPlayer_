@@ -2,37 +2,103 @@
 
 This project is a **Multimedia Player** developed for the **Multimedia Laboratory Course**.
 
+It includes:
+- An **audio player** with seek bar, time display, and volume control.
+- A **video player** with support for seek bar, volume control, and external subtitles (`.srt`).
+- A **main menu** to choose between audio and video players.
+- Basic **dark/light theme** support with a modern UI.
+
+---
+
 ## Requirements
 
-- **Windows** operating system  
-- **Python 3.10+**  
-- Python packages:  
-  - `tkinter`  
-  - `pyaudio`  
-  - `wave`  
+- **Windows** operating system (due to the use of `set_hwnd` for video output).  
+- **Python 3.10+**
 
-- **FFmpeg executables** (`ffmpeg.exe`, `ffplay.exe`, `ffprobe.exe`) must be present in the root folder of the repository.  
-  > **Note:** These are **not included** in the repository due to GitHub file size limits.
+### Python packages
 
-## Installing FFmpeg on Windows
+Installable via `pip`:
 
-1. Go to the official FFmpeg website: [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)  
-2. Download the **Windows static build**.  
-3. Extract the contents and copy the following files into the **root folder** of this project:  
-   - `ffmpeg.exe`  
-   - `ffplay.exe`  
-   - `ffprobe.exe`  
+- `python-vlc`  
+- Standard library modules:
+  - `tkinter`
+  - `threading`
+  - `time`
+  - `re`
+  - `tkinter.ttk`
+  - `tkinter.font`
 
-## Installation & Running
+> Most Python for Windows installations include `tkinter` by default.
 
-1. Clone or download this repository.  
-2. Ensure the FFmpeg executables are in the root folder.  
-3. Install the required Python packages (tkinter and wave are usually included with Python on Windows.):
+### VLC
 
-```bash
-pip install pyaudio
-```
-4. Run the python script:
+This project uses **VLC Media Player** via `python-vlc` bindings.
+
+You must have:
+
+- **VLC Media Player** installed on your system  
+- `python-vlc` correctly linked to that installation
+
+
+> **Note:** FFmpeg is not required; VLC handles all media playback.
+
+---
+
+## Installation
+
+1. Download and Install **VLC Media Player**:  
+   <https://www.videolan.org/vlc/>
+
+2. Install Python dependency:
+
+   ```bash
+   pip install python-vlc
+   ```
+
+   If you're using a virtual environment, activate it before installing.
+
+---
+
+## Running the Application
+
+Clone or download this repository.
+
+Ensure that VLC is installed and `python-vlc` is available in your Python environment.
+
+To start the application, run:
+
 ```bash
 python reproductor.py
 ```
+
+---
+
+## Features
+
+### Main Menu
+
+- Launch the audio or video player
+- Toggle light/dark theme
+
+### Audio Player
+
+- Play, pause, and stop
+- Seek bar with current and total time
+- Volume control
+- Displays loaded file name
+
+### Video Player
+
+- Play, pause, and stop
+- Seek bar with time display
+- Volume control
+- Support for `.srt` subtitles
+- Overlay display for subtitles
+
+---
+
+## Notes
+
+- The application is designed and tested for Windows.
+- Ensure VLC is properly installed and accessible by `python-vlc`.
+- Subtitle support is limited to `.srt` format.

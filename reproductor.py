@@ -1,23 +1,20 @@
 import tkinter as tk
 from tkinter import filedialog
-import pyaudio
-import wave
-import threading
-import utils
+from tkinter import ttk
+import tkinter.font as tkfont
 import time
+import threading
 import vlc
 import re
-from pathlib import Path
 
-# --- COLORES ---
+# --- COLORES BASE DEL TEMA OSCURO ---
 DARK_BG = "#1e1e1e"
 DARKER_BG = "#121212"
 ACCENT_COLOR = "#71f099"
 TEXT_COLOR = "#ffffff"
 BUTTON_BG = "#2d2d2d"
-BUTTON_HOVER = "#3d3d3d"
 
-# --- TEMAS ---
+# --- DEFINICIÓN DE TEMAS (CLARO / OSCURO) ---
 THEMES = {
     "dark": {
         "bg": "#1e1e1e",
@@ -43,599 +40,966 @@ THEMES = {
 
 CURRENT_THEME = "dark"
 
+FONT_FAMILY = "Onest"
+
+
+# --- INICIALIZACIÓN DE ESTILOS ---
+def init_styles(root):
+    """
+    Configura la fuente global de Tk (intentando usar Onest)
+    y define el estilo moderno para los ttk.Scale (sliders).
+    """
+    global FONT_FAMILY
+
+    families = set(tkfont.families())
+    if FONT_FAMILY not in families:
+        if "Segoe UI" in families:
+            FONT_FAMILY = "Segoe UI"
+        else:
+            default = tkfont.nametofont("TkDefaultFont")
+            FONT_FAMILY = default.cget("family")
+
+    
+    default_font = tkfont.nametofont("TkDefaultFont")
+    default_font.configure(family=FONT_FAMILY, size=10)
+    root.option_add("*Font", default_font)
+
+
+    style = ttk.Style()
+    try:
+        style.theme_use("clam")
+    except:
+        pass
+
+    style.configure(
+        "Modern.Horizontal.TScale",
+        troughcolor=DARKER_BG,    # color de la pista
+        background=ACCENT_COLOR,  # color del thumb
+        troughrelief="flat",
+        borderwidth=0,
+        sliderlength=18,
+        sliderrelief="flat"
+    )
+
+    style.map(
+        "Modern.Horizontal.TScale",
+        background=[
+            ("active", ACCENT_COLOR),
+            ("!active", ACCENT_COLOR)
+        ]
+    )
+
+
+# --- APLICAR TEMA A UNA VENTANA Y SUS PROCESOS HIJOS ---
 def applyTheme(win, theme):
     try:
         win.configure(bg=theme["bg"])
-    except Exception:
+    except:
         pass
-
     for child in win.winfo_children():
         cls = child.__class__.__name__
         if cls in ("Frame", "Labelframe"):
             try:
                 child.config(bg=theme["bg"])
-            except Exception:
+            except:
                 pass
         elif cls == "Label":
             try:
                 child.config(bg=theme["bg"], fg=theme["fg"])
-            except Exception:
+            except:
                 pass
         elif cls == "Button":
             try:
                 child.config(bg=theme["button_bg"], fg=theme["button_fg"],
-                             activebackground=theme["accent"], activeforeground=theme["button_active_fg"])
-            except Exception:
-                pass
-        elif cls == "Scale":
-            try:
-                child.config(bg=theme["button_bg"], fg=theme["accent"], troughcolor=theme["darker_bg"])
-            except Exception:
+                             activebackground=theme["accent"],
+                             activeforeground=theme["button_active_fg"])
+            except:
                 pass
         try:
             if child.winfo_children():
                 applyTheme(child, theme)
-        except Exception:
+        except:
             pass
-        
-# --- FUNCIONES DE SUBTÍTULOS ---
+
+
+# --- PARSEO DE SUBTÍTULOS SRT ---
 def parseSRT(filePath):
     subtitles = []
     try:
         with open(filePath, 'r', encoding='utf-8') as f:
             content = f.read()
-        
-        blocks = content.strip().split('\n\n')
+
+        blocks = content.strip().split("\n\n")
         for block in blocks:
-            lines = block.strip().split('\n')
+            lines = block.strip().split("\n")
             if len(lines) < 3:
                 continue
-            
+
             timecode = lines[1]
-            match = re.match(r'(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})', timecode)
+            match = re.match(
+                r"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})",
+                timecode
+            )
             if not match:
                 continue
-            
+
             h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, match.groups())
             start_ms = (h1 * 3600 + m1 * 60 + s1) * 1000 + ms1
             end_ms = (h2 * 3600 + m2 * 60 + s2) * 1000 + ms2
-            text = '\n'.join(lines[2:])
-            
+            text = "\n".join(lines[2:])
             subtitles.append((start_ms, end_ms, text))
-    except Exception as e:
-        print(f"Error parsing SRT: {e}")
-    
+    except:
+        pass
     return subtitles
 
-# --- REPRODUCTOR DE AUDIO ---
+
+# =================================================================
+#                       REPRODUCTOR DE AUDIO
+# =================================================================
 class musicPlayer:
     def __init__(self, master):
+        # Ventana y configuración base
         self.master = master
-        self.master.title("Reproductor de música")
+        self.master.title("Reproductor de Audio")
         self.master.configure(bg=DARK_BG)
-        self.centerWindow(600, 220)
 
-        # --- FRAME (CONTENEDOR) PRINCIPAL DE CONTROLES ---
+        # Tamaño base para escalar widgets (por proporción)
+        self.base_width = 700
+        self.base_height = 230
+        self.base_font_size = 10
+        self.centerWindow(self.base_width, self.base_height)
+        self.master.resizable(True, True)
+        self.master.protocol("WM_DELETE_WINDOW", self.onClose)
+
+        # Fuente propia para UI del reproductor de audio (para escalar con la ventana)
+        self.ui_font = tkfont.Font(family=FONT_FAMILY, size=self.base_font_size)
+
+        # Instancia de VLC (solo MediaPlayer, sencillo)
+        self.player = vlc.MediaPlayer()
+
+        # --- LAYOUT PRINCIPAL (USANDO PACK) ---
+        # Frame de contenido central
+        mainFrame = tk.Frame(master, bg=DARK_BG)
+        mainFrame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+
+        # Frame de controles abajo
         controlsFrame = tk.Frame(master, bg=DARK_BG)
-        controlsFrame.pack(pady=15)
+        controlsFrame.pack(side="bottom", fill="x", pady=12)
 
-        self.playButton = tk.Button(controlsFrame, text="▶ Reproducir", width=12, command=self.playAudio, 
-                                     state="disabled", bg=BUTTON_BG, fg=TEXT_COLOR, activebackground=ACCENT_COLOR,
-                                     activeforeground=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.playButton.grid(row=0, column=0, padx=8)
+        # Botón Reproducir
+        self.playButton = tk.Button(
+            controlsFrame, text="▶ Reproducir",
+            command=self.playAudio, state="disabled",
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.playButton.pack(side="left", padx=8, fill="x", expand=True)
 
-        self.pauseButton = tk.Button(controlsFrame, text="⏸ Pausar", width=12, command=self.pauseAudio, 
-                                      state="disabled", bg=BUTTON_BG, fg=TEXT_COLOR, activebackground=ACCENT_COLOR,
-                                      activeforeground=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.pauseButton.grid(row=0, column=1, padx=8)
+        # Botón Pausar/Reanudar
+        self.pauseButton = tk.Button(
+            controlsFrame, text="⏸ Pausar",
+            command=self.pauseAudio, state="disabled",
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.pauseButton.pack(side="left", padx=8, fill="x", expand=True)
 
-        self.stopButton = tk.Button(controlsFrame, text="⏹ Detener", width=12, command=self.stopAudio, 
-                                     state="disabled", bg=BUTTON_BG, fg=TEXT_COLOR, activebackground=ACCENT_COLOR,
-                                     activeforeground=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.stopButton.grid(row=0, column=2, padx=8)
+        # Botón Detener
+        self.stopButton = tk.Button(
+            controlsFrame, text="⏹ Detener",
+            command=self.stopAudio, state="disabled",
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.stopButton.pack(side="left", padx=8, fill="x", expand=True)
 
-        self.loadButton = tk.Button(controlsFrame, text="📂 Cargar Audio", width=15, command=self.loadFile,
-                                     bg=ACCENT_COLOR, fg=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.loadButton.grid(row=0, column=3, padx=8)
+        # Botón Cargar
+        self.loadButton = tk.Button(
+            controlsFrame, text="📂 Cargar Audio",
+            command=self.loadFile, bg=ACCENT_COLOR, fg=DARKER_BG,
+            relief="flat", font=self.ui_font
+        )
+        self.loadButton.pack(side="right", padx=8, fill="x", expand=True)
 
-        # --- BARRA DE PROGRESO ---
-        self.progress = tk.Scale(master, from_=0, to=1000, orient="horizontal", length=500, showvalue=0, 
-                                 command=self.updatePos, bg=BUTTON_BG, fg=ACCENT_COLOR, 
-                                 troughcolor=DARKER_BG, highlightthickness=0)
-        self.progress.pack(pady=15, padx=30)
+        # Slider de progreso (tiempo) que se adapta al ancho
+        self.progress = ttk.Scale(
+            mainFrame,
+            from_=0,
+            to=0,
+            orient="horizontal",
+            style="Modern.Horizontal.TScale"
+        )
+        self.progress.pack(pady=(10, 0), fill="x")
+        self.progress.bind("<ButtonRelease-1>", self.onSliderRelease)
 
-        # --- TIEMPOS ---
-        self.timeFrame = tk.Frame(master, bg=DARK_BG)
-        self.timeFrame.pack(fill="x", padx=30, pady=5)
+        # Frame para tiempo actual / total
+        tf = tk.Frame(mainFrame, bg=DARK_BG)
+        tf.pack(fill="x", padx=30, pady=5)
 
-        self.currentTimeLabel = tk.Label(self.timeFrame, text="0:00", bg=DARK_BG, fg=TEXT_COLOR, 
-                                         font=("Segoe UI", 10))
-        self.currentTimeLabel.pack(side="left")
+        self.currentTime = tk.Label(tf, text="0:00", bg=DARK_BG,
+                                    fg=TEXT_COLOR, font=self.ui_font)
+        self.currentTime.pack(side="left")
 
-        self.totalTimeLabel = tk.Label(self.timeFrame, text="0:00", bg=DARK_BG, fg=TEXT_COLOR, 
-                                       font=("Segoe UI", 10))
-        self.totalTimeLabel.pack(side="right")
+        self.totalTime = tk.Label(tf, text="0:00", bg=DARK_BG,
+                                  fg=TEXT_COLOR, font=self.ui_font)
+        self.totalTime.pack(side="right")
 
-        # --- "REPRODUCIENDO AHORA" ---
-        self.nowPlayingLabel = tk.Label(master, text="", font=("Segoe UI", 11, "italic"), 
-                                         fg=ACCENT_COLOR, bg=DARK_BG)
-        self.nowPlayingLabel.pack(pady=10)
+        # Frame y slider de volumen
+        volFrame = tk.Frame(mainFrame, bg=DARK_BG)
+        volFrame.pack(pady=(5, 0), fill="x")
 
-        # --- VARIABLES INTERNAS ---
-        self.audioThread = None
+        volLabel = tk.Label(volFrame, text="Volumen",
+                            bg=DARK_BG, fg=TEXT_COLOR, font=self.ui_font)
+        volLabel.pack(side="left", padx=(0, 10))
+
+        self.volumeScale = ttk.Scale(
+            volFrame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            style="Modern.Horizontal.TScale",
+            command=self.onVolumeChange
+        )
+        self.volumeScale.pack(side="left", fill="x", expand=True)
+        self.volumeScale.set(100)
+
+        # Establecer volumen inicial al 100%
+        self.player.audio_set_volume(100)
+
+        # Etiqueta "Reproduciendo ahora"
+        self.nowPlaying = tk.Label(mainFrame, text="",
+                                   fg=ACCENT_COLOR, bg=DARK_BG,
+                                   font=self.ui_font)
+        self.nowPlaying.pack(pady=8, fill="x")
+
+        # Variables internas de estado del audio
+        self.audioFile = None
         self.isPlaying = False
         self.isPaused = False
-        self.audioFile = None
-        self.currentPos = 0
-        self.totalFrames = 0
-        self.frameRate = 0
         self.duration = 0
-        self.sliderChange = None
         self.updatingProgress = False
+        self.updateThread = None
+        self.sliderUpdating = False
 
-    # --- MÉTODOS ---
-    # Cargar archivo de audio
-    def loadFile(self):
-        filePath = filedialog.askopenfilename(filetypes=[("Archivos de audio/video", "*.mp3 *.wav *.flac *.ogg *.m4a *.aac *.mp4 *.mkv")])
-        if not filePath:
+        # Vincular redimensionado de ventana para escalar fuente
+        self.master.bind("<Configure>", self.on_resize)
+
+    # --- EVENTO DE REDIMENSIÓN DE VENTANA (AUDIO) ---
+    def on_resize(self, event):
+        """
+        Ajusta el tamaño de la fuente de los widgets según el tamaño actual
+        de la ventana, usando como referencia las dimensiones base.
+        """
+        if event.widget is not self.master:
             return
-        self.audioFile = filePath
-        media = vlc.Media(filePath)
-        self.player.set_media(media)
+        w = max(event.width, 1)
+        h = max(event.height, 1)
+        scale = min(w / self.base_width, h / self.base_height)
+        new_size = max(8, int(self.base_font_size * scale))
+        self.ui_font.configure(size=new_size)
 
-        length = self.player.get_length()
-        if length <= 0:
-            self.player.play()
-            time.sleep(0.2)
-            self.player.pause()
-            length = self.player.get_length()
+    # --- CARGAR ARCHIVO DE AUDIO ---
+    def loadFile(self):
+        filetypes = [
+            ("Audio", "*.mp3 *.wav *.flac *.ogg *.aac *.m4a"),
+            ("Todos los archivos", "*.*")
+        ]
+        path = filedialog.askopenfilename(filetypes=filetypes)
+        if not path:
+            return
+        self.audioFile = path
 
-        total_secs = max(0, length // 1000)
-        self.progress.config(from_=0, to=1000)
+        # Reiniciar reproductor VLC con el nuevo archivo
+        self.player.stop()
+        self.player = vlc.MediaPlayer(path)
+        try:
+            self.player.audio_set_volume(int(self.volumeScale.get()))
+        except:
+            pass
+
+        # Resetear estado de sliders y tiempos
+        self.duration = 0
+        self.progress.configure(from_=0, to=0)
         self.progress.set(0)
-        self.totalTimeLabel.config(text=self._formatTime(total_secs))
-        self.currentTimeLabel.config(text="0:00")
-        self.nowPlayingLabel.config(text="Archivo cargado: " + self.audioFile.split('/')[-1])
+        self.currentTime.config(text="0:00")
+        self.totalTime.config(text="0:00")
+        self.nowPlaying.config(text="Cargado: " + path.split("/")[-1])
 
+        # Habilitar botón de reproducción
         self.playButton.config(state="normal")
-        self.stopButton.config(state="disabled")
         self.pauseButton.config(state="disabled")
+        self.stopButton.config(state="disabled")
 
-    # Reproducir audio
+    # --- REPRODUCIR AUDIO ---
     def playAudio(self):
         if not self.audioFile:
             return
+
         self.player.play()
+        try:
+            self.player.audio_set_volume(int(self.volumeScale.get()))
+        except:
+            pass
+
         self.isPlaying = True
         self.isPaused = False
+        self.updatingProgress = True
+
         self.playButton.config(state="disabled")
         self.pauseButton.config(state="normal")
         self.stopButton.config(state="normal")
 
+        # Hilo que mantiene el slider sincronizado con el tiempo real
         if not self.updateThread or not self.updateThread.is_alive():
-            self.updateThread = threading.Thread(target=self._updateSlider, daemon=True)
+            self.updateThread = threading.Thread(
+                target=self.updateSliderThread,
+                daemon=True
+            )
             self.updateThread.start()
 
-    # Pausar audio
+    # --- HILO: ACTUALIZAR SLIDER / TIEMPOS (AUDIO) ---
+    def updateSliderThread(self):
+        """
+        Inicialmente intenta obtener la duración real.
+        Después, mientras se reproduce, actualiza el slider y
+        las etiquetas de tiempo cada 200 ms.
+        """
+        tries = 0
+        # Intentar leer la longitud del archivo
+        while self.updatingProgress and self.duration == 0 and tries < 20:
+            length_ms = self.player.get_length()
+            if length_ms and length_ms > 0:
+                total_sec = length_ms // 1000
+                self.duration = total_sec
+                self.sliderUpdating = True
+                self.progress.configure(to=total_sec)
+                self.progress.set(0)
+                self.sliderUpdating = False
+                self.totalTime.config(text=self.formatTime(total_sec))
+                break
+            tries += 1
+            time.sleep(0.2)
+
+        # Bucle principal de actualización de tiempo
+        while self.updatingProgress and self.isPlaying:
+            if not self.isPaused:
+                length_ms = self.player.get_length()
+                if length_ms > 0:
+                    total_sec = length_ms // 1000
+                    cur_ms = self.player.get_time()
+                    cur_sec = max(0, cur_ms // 1000)
+
+                    self.sliderUpdating = True
+                    self.progress.configure(to=total_sec)
+                    self.progress.set(cur_sec)
+                    self.sliderUpdating = False
+
+                    self.currentTime.config(text=self.formatTime(cur_sec))
+                    self.totalTime.config(text=self.formatTime(total_sec))
+            time.sleep(0.2)
+
+    # --- CUANDO SE SUELTA EL SLIDER (AUDIO) ---
+    def onSliderRelease(self, event):
+        if self.sliderUpdating or not self.audioFile:
+            return
+        value = self.progress.get()
+        self.updatePos(value)
+
+    # --- CAMBIO DE VOLUMEN ---
+    def onVolumeChange(self, value):
+        try:
+            self.player.audio_set_volume(int(float(value)))
+        except:
+            pass
+
+    # --- PAUSAR / REANUDAR ---
     def pauseAudio(self):
         if not self.isPlaying:
             return
         self.player.pause()
         self.isPaused = not self.isPaused
-        self.pauseButton.config(text="▶ Reanudar" if self.isPaused else "⏸ Pausar")
+        self.pauseButton.config(
+            text="▶ Reanudar" if self.isPaused else "⏸ Pausar"
+        )
 
-    # Método para detener la reproducción
+    # --- DETENER AUDIO ---
     def stopAudio(self):
-        self.player.stop()
         self.isPlaying = False
+        self.updatingProgress = False
+        try:
+            self.player.stop()
+        except:
+            pass
         self.isPaused = False
         self.progress.set(0)
-        self.currentTimeLabel.config(text="0:00")
-        self.totalTimeLabel.config(text="0:00")
-        self.nowPlayingLabel.config(text="")
+        self.currentTime.config(text="0:00")
+        self.totalTime.config(
+            text=self.formatTime(self.duration) if self.duration > 0 else "0:00"
+        )
+        self.nowPlaying.config(text="")
         self.playButton.config(state="normal")
         self.pauseButton.config(state="disabled", text="⏸ Pausar")
         self.stopButton.config(state="disabled")
-        self.updatingProgress = False
 
-    # Método para controlar la reproducción del audio
-    def _playAudio(self):
-        chunk = 1024
-        waveFile = wave.open(self.audioFile, 'rb')
-        pAud = pyaudio.PyAudio()
-
-        # Configuración del audio
-        stream = pAud.open(format=pAud.get_format_from_width(waveFile.getsampwidth()),
-                           channels=waveFile.getnchannels(),
-                           rate=waveFile.getframerate(),
-                           output=True)
-        
-        # Posicionar en el frame correcto si se movió el slider
-        if self.sliderChange is not None:
-            newFrame = int(self.sliderChange * self.frameRate)
-            waveFile.setpos(newFrame)
-            self.currentPos = newFrame
-            self.sliderChange = None
-        else:
-            self.currentPos = 0
-        # Leer datos
-        data = waveFile.readframes(chunk)
-        threading.Thread(target=self._updateSlider, daemon=True).start()
-
-        while data and self.isPlaying:
-            if self.isPaused:
-                time.sleep(0.1)
-                continue
-
-            if self.sliderChange is not None:
-                newFrame = int(self.sliderChange * self.frameRate)
-                waveFile.setpos(newFrame)
-                self.currentPos = newFrame
-                self.sliderChange = None
-                data = waveFile.readframes(chunk)
-                continue
-
-            stream.write(data)
-            self.currentPos = waveFile.tell()
-            data = waveFile.readframes(chunk)
-
-        stream.stop_stream()
-        stream.close()
-        pAud.terminate()
-        waveFile.close()
-        self.isPlaying = False
-        self.updatingProgress = False
-        self.progress.set(0)
-        self.currentTimeLabel.config(text="0:00")
-        self.nowPlayingLabel.config(text="")
-        self.playButton.config(state="normal")
-        self.pauseButton.config(state="disabled", text="⏸ Pausar")
-        self.stopButton.config(state="disabled")
-        
-    # Método para actualizar el slider
-    def _updateSlider(self):
-        self.updatingProgress = True
-        while self.isPlaying and self.updatingProgress:
-            if not self.isPaused:
-                currentTime = self.currentPos / self.frameRate
-                self.progress.set(currentTime)
-                self.currentTimeLabel.config(text=self._formatTime(currentTime))
-            time.sleep(0.2)
-        self.updatingProgress = False
-    # Método para darle formato correcto al tiempo
-    def _formatTime(self, seconds):
-        m = int(seconds // 60)
-        s = int(seconds % 60)
-        return f"{m}:{s:02}"
-    # Método para actualizar la posición del audio al mover el slider
+    # --- SALTO DE POSICIÓN EN EL AUDIO DESDE EL SLIDER ---
     def updatePos(self, value):
-        if not self.audioFile:
+        if self.sliderUpdating or not self.audioFile:
             return
         seconds = float(value)
         if self.isPlaying:
-            self.sliderChange = seconds
-        else:
-            self.progress.set(seconds)
-            self.currentTimeLabel.config(text=self._formatTime(seconds))
-    # Método para centrar la ventana
-    def centerWindow(self, width, height):
-        screen_width = self.master.winfo_screenwidth()
-        screen_height = self.master.winfo_screenheight()
-        x = (screen_width // 2) - (width // 2)
-        y = (screen_height // 2) - (height // 2)
-        self.master.geometry(f"{width}x{height}+{x}+{y}")
+            try:
+                self.player.set_time(int(seconds * 1000))
+            except:
+                pass
+        self.currentTime.config(text=self.formatTime(seconds))
 
-# --- REPRODUCTOR DE VIDEO ---
+    # --- FORMATEO DE SEGUNDOS A M:SS ---
+    def formatTime(self, seconds):
+        seconds = int(seconds)
+        m = seconds // 60
+        s = seconds % 60
+        return f"{m}:{s:02}"
+
+    # --- CENTRAR VENTANA EN PANTALLA ---
+    def centerWindow(self, w, h):
+        sw = self.master.winfo_screenwidth()
+        sh = self.master.winfo_screenheight()
+        x = (sw // 2) - (w // 2)
+        y = (sh // 2) - (h // 2)
+        self.master.geometry(f"{w}x{h}+{x}+{y}")
+
+    # --- CIERRE SEGURO DE VENTANA ---
+    def onClose(self):
+        try:
+            self.stopAudio()
+        except:
+            pass
+        try:
+            self.master.destroy()
+        except:
+            pass
+
+
+# =================================================================
+#                       REPRODUCTOR DE VIDEO
+# =================================================================
 class videoPlayer:
     def __init__(self, master):
+        # Ventana y configuración base
         self.master = master
         self.master.title("Reproductor de Video")
         self.master.configure(bg=DARK_BG)
-        self.center_window(900, 600)
 
-        # Use MediaListPlayer instead of MediaPlayer for subtitle support
-        self.instance = vlc.Instance()
-        self.mediaList = self.instance.media_list_new()
-        self.player = self.instance.media_list_player_new()
+        # Tamaño base para escalar
+        self.base_width = 900
+        self.base_height = 650
+        self.base_font_size = 10
+        self.centerWindow(self.base_width, self.base_height)
+        self.master.resizable(True, True)
+        self.master.protocol("WM_DELETE_WINDOW", self.onClose)
 
-        # --- CONTROLES ---
+        # Fuente de la UI del reproductor de vídeo
+        self.ui_font = tkfont.Font(family=FONT_FAMILY, size=self.base_font_size)
+
+        # Instancia VLC
+        self.player = vlc.MediaPlayer()
+
+        # Frame principal de contenido
+        mainFrame = tk.Frame(master, bg=DARK_BG)
+        mainFrame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+
+        # Frame de controles inferior
         controlsFrame = tk.Frame(master, bg=DARK_BG)
-        controlsFrame.pack(pady=12)
+        controlsFrame.pack(side="bottom", fill="x", pady=12)
 
-        self.playButton = tk.Button(controlsFrame, text="▶ Reproducir", width=12, command=self.playVideo, 
-                                     state="disabled", bg=BUTTON_BG, fg=TEXT_COLOR, activebackground=ACCENT_COLOR,
-                                     activeforeground=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.playButton.grid(row=0, column=0, padx=8)
-        
-        self.pauseButton = tk.Button(controlsFrame, text="⏸ Pausar", width=12, command=self.pauseVideo, 
-                                      state="disabled", bg=BUTTON_BG, fg=TEXT_COLOR, activebackground=ACCENT_COLOR,
-                                      activeforeground=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.pauseButton.grid(row=0, column=1, padx=8)
-        
-        self.stopButton = tk.Button(controlsFrame, text="⏹ Detener", width=12, command=self.stopVideo, 
-                                     state="disabled", bg=BUTTON_BG, fg=TEXT_COLOR, activebackground=ACCENT_COLOR,
-                                     activeforeground=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.stopButton.grid(row=0, column=2, padx=8)
-        
-        self.loadButton = tk.Button(controlsFrame, text="📂 Cargar Video", width=15, command=self.loadFile,
-                                     bg=ACCENT_COLOR, fg=DARKER_BG, relief="flat", font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.loadButton.grid(row=0, column=3, padx=8)
+        # Botón Reproducir
+        self.playButton = tk.Button(
+            controlsFrame, text="▶ Reproducir",
+            command=self.playVideo, state="disabled",
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.playButton.pack(side="left", padx=8, fill="x", expand=True)
 
-        self.loadSubtitleButton = tk.Button(controlsFrame, text="💬 Cargar Subtítulos", width=15,
-                                    command=self.loadSubtitle,
-                                    bg=ACCENT_COLOR, fg=DARKER_BG, relief="flat",
-                                    font=("Segoe UI", 10, "bold"), padx=10, pady=8)
-        self.loadSubtitleButton.grid(row=0, column=4, padx=8)
+        # Botón Pausar
+        self.pauseButton = tk.Button(
+            controlsFrame, text="⏸ Pausar",
+            command=self.pauseVideo, state="disabled",
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.pauseButton.pack(side="left", padx=8, fill="x", expand=True)
 
-        # --- FRAME DE VIDEO ---
-        self.videoFrame = tk.Frame(master, bg=DARKER_BG, width=640, height=360)
+        # Botón Detener
+        self.stopButton = tk.Button(
+            controlsFrame, text="⏹ Detener",
+            command=self.stopVideo, state="disabled",
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.stopButton.pack(side="left", padx=8, fill="x", expand=True)
+
+        # Botón Cargar Video
+        self.loadButton = tk.Button(
+            controlsFrame, text="📂 Cargar Video",
+            command=self.loadFile, bg=ACCENT_COLOR, fg=DARKER_BG,
+            relief="flat", font=self.ui_font
+        )
+        self.loadButton.pack(side="right", padx=8, fill="x", expand=True)
+
+        # Botón Cargar Subtítulos
+        self.loadSubtitleButton = tk.Button(
+            controlsFrame, text="💬 Subtítulos",
+            command=self.loadSubtitle, bg=ACCENT_COLOR, state="disabled",
+            fg=DARKER_BG, relief="flat", font=self.ui_font
+        )
+        self.loadSubtitleButton.pack(side="right", padx=8, fill="x", expand=True)
+
+        # Área de vídeo (ocupa prácticamente todo el espacio disponible)
+        self.videoFrame = tk.Frame(mainFrame, bg=DARKER_BG)
         self.videoFrame.pack(pady=12, padx=20, fill="both", expand=True)
 
-        # --- OVERLAY DE SUBTÍTULOS ---
+        # Ventana overlay para subtítulos
         self.subtitle_overlay = tk.Toplevel(self.master)
         self.subtitle_overlay.overrideredirect(True)
         self.subtitle_overlay.attributes("-topmost", True)
         self.subtitle_overlay.configure(bg="magenta")
         try:
             self.subtitle_overlay.wm_attributes("-transparentcolor", "magenta")
-        except Exception:
+        except:
             pass
-        self.subtitle_overlay_label = tk.Label(self.subtitle_overlay, text="", font=("Segoe UI", 14, "bold"),
-                                               bg="magenta", fg="#FFFF00", wraplength=600, justify="center")
-        self.subtitle_overlay_label.pack(expand=True, fill="both")
+        self.subtitle_label = tk.Label(
+            self.subtitle_overlay,
+            text="",
+            bg="magenta",
+            fg="yellow",
+            font=(FONT_FAMILY, 14),
+            wraplength=600,
+            justify="center"
+        )
+        self.subtitle_label.pack(expand=True, fill="both")
         self.subtitle_overlay.withdraw()
 
-        # --- BARRA DE PROGRESO ---
-        self.progress = tk.Scale(master, from_=0, to=0, orient="horizontal", length=600,
-                                 showvalue=0, command=self.updatePos, bg=BUTTON_BG, fg=ACCENT_COLOR,
-                                 troughcolor=DARKER_BG, highlightthickness=0)
-        self.progress.pack(pady=10, padx=30)
+        # Reposicionar overlay cuando cambie el tamaño del frame de vídeo
+        self.videoFrame.bind("<Configure>", lambda e: self.posSub())
 
-        timeFrame = tk.Frame(master, bg=DARK_BG)
-        timeFrame.pack(fill="x", padx=30, pady=5)
+        # Slider de progreso (0-1000) que ocupa todo el ancho
+        self.progress = ttk.Scale(
+            mainFrame,
+            from_=0,
+            to=1000,
+            orient="horizontal",
+            style="Modern.Horizontal.TScale"
+        )
+        self.progress.pack(pady=10, fill="x")
+        self.progress.bind("<ButtonRelease-1>", self.onSliderRelease)
 
-        self.currentTimeLabel = tk.Label(timeFrame, text="0:00", bg=DARK_BG, fg=TEXT_COLOR, 
-                                         font=("Segoe UI", 10))
-        self.currentTimeLabel.pack(side="left")
-        
-        self.totalTimeLabel = tk.Label(timeFrame, text="0:00", bg=DARK_BG, fg=TEXT_COLOR, 
-                                       font=("Segoe UI", 10))
-        self.totalTimeLabel.pack(side="right")
+        # Frame para tiempos
+        tf = tk.Frame(mainFrame, bg=DARK_BG)
+        tf.pack(fill="x", padx=30, pady=5)
 
-        self.nowPlayingLabel = tk.Label(master, text="", font=("Segoe UI", 11, "italic"), 
-                                         fg=ACCENT_COLOR, bg=DARK_BG)
-        self.nowPlayingLabel.pack(pady=8)
+        self.currentTime = tk.Label(tf, text="0:00",
+                                    bg=DARK_BG, fg=TEXT_COLOR,
+                                    font=self.ui_font)
+        self.currentTime.pack(side="left")
 
-        # --- VARIABLES ---
+        self.totalTime = tk.Label(tf, text="0:00",
+                                  bg=DARK_BG, fg=TEXT_COLOR,
+                                  font=self.ui_font)
+        self.totalTime.pack(side="right")
+
+        # Frame volumen
+        volFrame = tk.Frame(mainFrame, bg=DARK_BG)
+        volFrame.pack(pady=(5, 0), fill="x")
+
+        volLabel = tk.Label(volFrame, text="Volumen",
+                            bg=DARK_BG, fg=TEXT_COLOR, font=self.ui_font)
+        volLabel.pack(side="left", padx=(0, 10))
+
+        self.volumeScale = ttk.Scale(
+            volFrame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            style="Modern.Horizontal.TScale",
+            command=self.onVolumeChange
+        )
+        self.volumeScale.pack(side="left", fill="x", expand=True)
+        self.volumeScale.set(100)
+        self.player.audio_set_volume(100)
+
+        # Etiqueta "Reproduciendo ahora"
+        self.nowPlaying = tk.Label(mainFrame, text="",
+                                   fg=ACCENT_COLOR, bg=DARK_BG,
+                                   font=self.ui_font)
+        self.nowPlaying.pack(pady=8, fill="x")
+
+        # Estado interno de vídeo
         self.videoFile = None
-        self.subtitleFile = None
         self.subtitles = []
         self.isPlaying = False
         self.isPaused = False
-        self.sliderChange = None
+        self.duration = 0
+        self.sliderUpdating = False
         self.updatingProgress = False
         self.updateThread = None
 
-    # --- MÉTODOS ---
-    def center_window(self, width, height):
-        screen_width = self.master.winfo_screenwidth()
-        screen_height = self.master.winfo_screenheight()
-        x = (screen_width // 2) - (width // 2)
-        y = (screen_height // 2) - (height // 2)
-        self.master.geometry(f"{width}x{height}+{x}+{y}")
+        # Vincular redimensionado para escalar fuentes
+        self.master.bind("<Configure>", self.on_resize)
 
-    # Cargar subtítulos
+    # --- EVENTO REDIMENSIÓN (VIDEO) ---
+    def on_resize(self, event):
+        """
+        Redimensiona la fuente de la UI del reproductor de vídeo en función
+        del tamaño de la ventana, manteniendo proporción con el tamaño base.
+        """
+        if event.widget is not self.master:
+            return
+        w = max(event.width, 1)
+        h = max(event.height, 1)
+        scale = min(w / self.base_width, h / self.base_height)
+        new_size = max(8, int(self.base_font_size * scale))
+        self.ui_font.configure(size=new_size)
+
+    # --- CARGAR SUBTÍTULOS EXTERNOS ---
     def loadSubtitle(self):
         if not self.videoFile:
             return
-        subtitlePath = filedialog.askopenfilename(filetypes=[("Archivos de subtítulos", "*.srt *.sub *.ass *.ssa")])
-        if subtitlePath:
-            self.subtitleFile = subtitlePath
-            self.subtitles = parseSRT(subtitlePath)
-            mediaPlayer = self.player.get_media_player()
-            if mediaPlayer:
-                try:
-                    mediaPlayer.video_set_subtitle_file(subtitlePath)
-                    self.nowPlayingLabel.config(text="Subtítulos cargados: " + subtitlePath.split('/')[-1])
-                except Exception as e:
-                    print(f"Error loading subtitles: {e}")
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("Subtítulos", "*.srt *.ass *.ssa *.vtt *.sub *.txt"),
+                ("Todos los archivos", "*.*")
+            ]
+        )
+        if not path:
+            return
+        # De momento solo parseamos SRT; otros formatos no se procesan a nivel texto
+        self.subtitles = parseSRT(path)
+        self.subtitle_overlay.deiconify()
+        self.posSub()
 
-            self.subtitle_overlay.deiconify()
-
-     
-    # Cargar archivo de video
+    # --- CARGAR ARCHIVO DE VÍDEO ---
     def loadFile(self):
-        filePath = filedialog.askopenfilename(filetypes=[("Archivos de video", "*.mp4 *.avi *.mkv *.mov *.flv *.wmv")])
-        if filePath:
-            self.videoFile = filePath
-            self.subtitleFile = None
-            self.subtitles = []
-            
-            self.mediaList = self.instance.media_list_new()
-            media = self.instance.media_new(filePath)
-            self.mediaList.add_media(media)
-            self.player.set_media_list(self.mediaList)
-            
-            mediaPlayer = self.player.get_media_player()
-            mediaPlayer.set_hwnd(self.videoFrame.winfo_id())
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("Videos", "*.mp4 *.avi *.mkv *.mov *.flv *.wmv *.webm"),
+                ("Todos los archivos", "*.*")
+            ]
+        )
+        if not path:
+            return
+        self.videoFile = path
 
-            self.posSub()
-            self.subtitle_overlay.deiconify()
+        self.player.stop()
+        self.player = vlc.MediaPlayer(path)
+        # Asociar la salida de vídeo al frame de Tk
+        try:
+            self.player.set_hwnd(self.videoFrame.winfo_id())
+        except:
+            pass
+        try:
+            self.player.audio_set_volume(int(self.volumeScale.get()))
+        except:
+            pass
 
-            self.playButton.config(state="normal")
-            self.stopButton.config(state="disabled")
-            self.pauseButton.config(state="disabled")
-            self.nowPlayingLabel.config(text="Archivo cargado: " + self.videoFile.split('/')[-1])
+        self.duration = 0
+        self.progress.set(0)
+        self.currentTime.config(text="0:00")
+        self.totalTime.config(text="0:00")
+        self.nowPlaying.config(text="Cargado: " + path.split("/")[-1])
 
-    # Reproducir video
+        self.playButton.config(state="normal")
+        self.pauseButton.config(state="disabled")
+        self.stopButton.config(state="disabled")
+        self.loadSubtitleButton.config(state="normal")
+
+        self.posSub()
+        self.subtitle_overlay.deiconify()
+
+    # --- REPRODUCIR VÍDEO ---
     def playVideo(self):
         if not self.videoFile:
             return
+
         self.player.play()
+        try:
+            self.player.audio_set_volume(int(self.volumeScale.get()))
+        except:
+            pass
+
         self.isPlaying = True
         self.isPaused = False
+        self.updatingProgress = True
 
         self.playButton.config(state="disabled")
         self.pauseButton.config(state="normal")
         self.stopButton.config(state="normal")
 
-        # Hilo para actualizar slider
+        # Hilo que mantiene el slider y subtítulos sincronizados
         if not self.updateThread or not self.updateThread.is_alive():
-            self.updateThread = threading.Thread(target=self.updateSlider, daemon=True)
+            self.updateThread = threading.Thread(
+                target=self.updateSliderThread,
+                daemon=True
+            )
             self.updateThread.start()
 
-    # Pausar video
+    # --- HILO: ACTUALIZAR SLIDER / TIEMPOS / SUBTÍTULOS ---
+    def updateSliderThread(self):
+        """
+        Mientras se reproduce el vídeo, actualiza el slider de posición,
+        las etiquetas de tiempo y el texto de subtítulos.
+        """
+        while self.updatingProgress and self.isPlaying:
+            if not self.isPaused:
+                length = self.player.get_length()
+                if length > 0:
+                    cur_ms = self.player.get_time()
+                    pos = cur_ms / length
+                    if pos < 0 or pos > 1:
+                        pos = 0.0
+
+                    cur_sec = cur_ms // 1000
+                    total_sec = length // 1000
+
+                    self.sliderUpdating = True
+                    self.progress.set(pos * 1000)
+                    self.sliderUpdating = False
+
+                    self.currentTime.config(text=self._formatTime(cur_sec))
+                    self.totalTime.config(text=self._formatTime(total_sec))
+
+                    self.updateSub(cur_ms)
+            time.sleep(0.2)
+
+    # --- CUANDO SE SUELTA EL SLIDER (VIDEO) ---
+    def onSliderRelease(self, event):
+        if self.sliderUpdating or not self.videoFile:
+            return
+        value = self.progress.get()
+        self.updatePos(value)
+
+    # --- CAMBIO DE VOLUMEN (VIDEO) ---
+    def onVolumeChange(self, value):
+        try:
+            self.player.audio_set_volume(int(float(value)))
+        except:
+            pass
+
+    # --- PAUSAR / REANUDAR VÍDEO ---
     def pauseVideo(self):
         if not self.isPlaying:
             return
         self.player.pause()
         self.isPaused = not self.isPaused
-        if self.isPaused:
-            self.pauseButton.config(text="▶ Reanudar")
-        else:
-            self.pauseButton.config(text="⏸ Pausar")
+        self.pauseButton.config(
+            text="▶ Reanudar" if self.isPaused else "⏸ Pausar"
+        )
 
-    # Detener video
+    # --- DETENER VÍDEO ---
     def stopVideo(self):
-        self.player.stop()
         self.isPlaying = False
+        self.updatingProgress = False
+        try:
+            self.player.stop()
+        except:
+            pass
         self.isPaused = False
         self.progress.set(0)
-        self.currentTimeLabel.config(text="0:00")
-        self.totalTimeLabel.config(text="0:00")
-        self.nowPlayingLabel.config(text="")
-        self.subtitle_overlay_label.config(text="")
+        self.currentTime.config(text="0:00")
+        self.totalTime.config(
+            text=self._formatTime(self.duration) if self.duration > 0 else "0:00"
+        )
+        self.subtitle_label.config(text="")
         self.subtitle_overlay.withdraw()
         self.playButton.config(state="normal")
         self.pauseButton.config(state="disabled", text="⏸ Pausar")
         self.stopButton.config(state="disabled")
 
-    # Mover slider
+    # --- SALTO DE POSICIÓN DESDE EL SLIDER ---
     def updatePos(self, value):
-        if not self.videoFile:
+        if self.sliderUpdating or not self.videoFile:
             return
-        pos = float(value) / 1000
+        pos = float(value) / 1000.0
         if self.isPlaying:
-            mediaPlayer = self.player.get_media_player()
-            mediaPlayer.set_position(pos)
+            try:
+                self.player.set_position(pos)
+            except:
+                pass
         else:
             self.progress.set(float(value))
-            mediaPlayer = self.player.get_media_player()
-            length = mediaPlayer.get_length() // 1000
-            current = int(pos * length)
-            self.currentTimeLabel.config(text=self.formatTime(current))
+            length = self.player.get_length() // 1000
+            current = int(pos * length) if length > 0 else 0
+            self.currentTime.config(text=self._formatTime(current))
 
-    # Hilo para actualizar slider y tiempo
-    def updateSlider(self):
-        self.updatingProgress = True
-        while self.isPlaying and self.updatingProgress:
-            if not self.isPaused:
-                mediaPlayer = self.player.get_media_player()
-                length = mediaPlayer.get_length()
-                if length > 0:
-                    time_ms = mediaPlayer.get_time()
-                    pos = time_ms / length
-                    self.progress.config(to=1000)
-                    self.progress.set(pos * 1000)
-                    current = time_ms // 1000
-                    total = length // 1000
-                    self.currentTimeLabel.config(text=self.formatTime(current))
-                    self.totalTimeLabel.config(text=self.formatTime(total))
-                    self.posSub()
-                    self.updateSub(time_ms)
-            time.sleep(0.2)
-
-    def updateSub(self, time_ms):
-        """Update subtitle label based on current playback time"""
-        current_text = ""
-        for start, end, text in self.subtitles:
-            if start <= time_ms <= end:
-                current_text = text
+    # --- ACTUALIZAR TEXTO DE SUBTÍTULOS SEGÚN TIEMPO ---
+    def updateSub(self, t_ms):
+        text = ""
+        for start, end, s in self.subtitles:
+            if start <= t_ms <= end:
+                text = s
                 break
-        self.subtitle_overlay_label.config(text=current_text)
+        self.subtitle_label.config(text=text)
 
+    # --- POSICIONAR OVERLAY DE SUBTÍTULOS SOBRE EL VÍDEO ---
     def posSub(self):
-        
-        self.master.update_idletasks()
-        x = self.videoFrame.winfo_rootx()
-        y = self.videoFrame.winfo_rooty()
-        w = max(100, self.videoFrame.winfo_width())
-        h = max(50, self.videoFrame.winfo_height())
-        overlay_h = max(40, int(h * 0.18))
-        overlay_y = y + h - overlay_h - 8
         try:
-            self.subtitle_overlay.geometry(f"{w}x{overlay_h}+{x}+{overlay_y}")
-        except Exception:
+            self.master.update_idletasks()
+            x = self.videoFrame.winfo_rootx()
+            y = self.videoFrame.winfo_rooty()
+            w = self.videoFrame.winfo_width()
+            h = self.videoFrame.winfo_height()
+            self.subtitle_overlay.geometry(
+                f"{w}x{int(h*0.18)}+{x}+{y+h-int(h*0.18)-8}"
+            )
+            self.subtitle_label.config(wraplength=int(w * 0.9))
+        except:
             pass
 
-    def formatTime(self, seconds):
-        m = int(seconds // 60)
-        s = int(seconds % 60)
+    # --- FORMATEO DE SEGUNDOS A M:SS ---
+    def _formatTime(self, seconds):
+        seconds = int(seconds)
+        m = seconds // 60
+        s = seconds % 60
         return f"{m}:{s:02}"
 
-     
-# --- MENÚ PRINCIPAL ---
+    # --- CENTRAR VENTANA EN PANTALLA ---
+    def centerWindow(self, w, h):
+        sw = self.master.winfo_screenwidth()
+        sh = self.master.winfo_screenheight()
+        x = (sw // 2) - (w // 2)
+        y = (sh // 2) - (h // 2)
+        self.master.geometry(f"{w}x{h}+{x}+{y}")
+
+    # --- CIERRE SEGURO DE VENTANA ---
+    def onClose(self):
+        try:
+            self.stopVideo()
+        except:
+            pass
+        try:
+            self.master.destroy()
+        except:
+            pass
+
+
+# =================================================================
+#                         MENÚ PRINCIPAL
+# =================================================================
 class mainApp:
     def __init__(self, master):
+        # Ventana principal
         self.master = master
         self.master.title("Reproductor Multimedia")
         self.master.configure(bg=DARK_BG)
-        self.center_window(400, 400)
-        
-        self.themeButton = tk.Button(master, text="🌙", width=6, command=self.toggleTheme,
-                                     bg=THEMES[CURRENT_THEME]["button_bg"], fg=THEMES[CURRENT_THEME]["button_fg"],
-                                     activebackground=THEMES[CURRENT_THEME]["accent"], activeforeground=THEMES[CURRENT_THEME]["button_active_fg"],
-                                     relief="flat", font=("Segoe UI", 10, "bold"))
-        self.themeButton.pack(pady=(0,10))
-        
+
+        # Tamaños base para escalado
+        self.base_width = 400
+        self.base_height = 400
+        self.base_font_size = 10
+        self.base_title_size = 18
+        self.centerWindow(self.base_width, self.base_height)
+        self.master.resizable(True, True)
+
+        # Fuentes de la UI del menú
+        self.ui_font = tkfont.Font(family=FONT_FAMILY, size=self.base_font_size)
+        self.title_font = tkfont.Font(
+            family=FONT_FAMILY,
+            size=self.base_title_size,
+            weight="bold"
+        )
+
+        # Contenedor central que se redimensiona
+        container = tk.Frame(master, bg=DARK_BG)
+        container.pack(fill="both", expand=True)
+
+        container.grid_columnconfigure(0, weight=1)
+        container.grid_columnconfigure(1, weight=0)
+        container.grid_columnconfigure(2, weight=1)
+        container.grid_rowconfigure(0, weight=1)
+        container.grid_rowconfigure(4, weight=1)
+
+        self.themeButton = tk.Button(
+            container,
+            text="🌙",
+            width=5,
+            command=self.toggleTheme,
+            bg=THEMES[CURRENT_THEME]["button_bg"],
+            fg=THEMES[CURRENT_THEME]["button_fg"],
+            relief="flat",
+            font=self.ui_font
+        )
+        self.themeButton.grid(row=0, column=1, pady=10, padx=10, sticky="ne")
+
+        # Aplicar tema inicial
         applyTheme(self.master, THEMES[CURRENT_THEME])
 
-        titleLabel = tk.Label(master, text="Reproductor Multimedia", font=("Segoe UI", 18, "bold"),
-                              fg=THEMES[CURRENT_THEME]["accent"], bg=DARK_BG)
-        titleLabel.pack(pady=20)
+        # Título principal
+        t = tk.Label(container, text="Reproductor Multimedia",
+                     font=self.title_font, fg=ACCENT_COLOR, bg=DARK_BG)
+        t.grid(row=1, column=1, pady=20)
 
-        self.audioButton = tk.Button(master, text="♫ Reproductor de Audio", width=25, height=3, 
-                                      command=self.openMusicPlayer, bg=BUTTON_BG, fg=TEXT_COLOR,
-                                      activebackground=ACCENT_COLOR, activeforeground=DARKER_BG,
-                                      relief="flat", font=("Segoe UI", 11, "bold"))
-        self.audioButton.pack(pady=15, padx=30, fill="x")
+        # Botón de reproductor de audio
+        self.audioButton = tk.Button(
+            container, text="♫ Reproductor de Audio",
+            command=self.openMusic,
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.audioButton.grid(row=2, column=1, pady=10, padx=30, sticky="ew")
 
-        self.videoButton = tk.Button(master, text="🎬 Reproductor de Video", width=25, height=3, 
-                                      command=self.openVideoPlayer, bg=BUTTON_BG, fg=TEXT_COLOR,
-                                      activebackground=ACCENT_COLOR, activeforeground=DARKER_BG,
-                                      relief="flat", font=("Segoe UI", 11, "bold"))
-        self.videoButton.pack(pady=15, padx=30, fill="x")
+        # Botón de reproductor de vídeo
+        self.videoButton = tk.Button(
+            container, text="🎬 Reproductor de Video",
+            command=self.openVideo,
+            bg=BUTTON_BG, fg=TEXT_COLOR, relief="flat",
+            font=self.ui_font
+        )
+        self.videoButton.grid(row=3, column=1, pady=10, padx=30, sticky="ew")
 
-    # Cambiar tema
+        # Vincular redimensionado para escalar fuentes
+        self.master.bind("<Configure>", self.on_resize)
+
+    # --- EVENTO REDIMENSIÓN (MENÚ PRINCIPAL) ---
+    def on_resize(self, event):
+        if event.widget is not self.master:
+            return
+        w = max(event.width, 1)
+        h = max(event.height, 1)
+        scale = min(w / self.base_width, h / self.base_height)
+        new_base = max(8, int(self.base_font_size * scale))
+        new_title = max(12, int(self.base_title_size * scale))
+        self.ui_font.configure(size=new_base)
+        self.title_font.configure(size=new_title)
+
+    # --- ABRIR REPRODUCTOR DE AUDIO ---
+    def openMusic(self):
+        win = tk.Toplevel(self.master)
+        win.resizable(True, True)
+        musicPlayer(win)
+
+    # --- ABRIR REPRODUCTOR DE VIDEO ---
+    def openVideo(self):
+        win = tk.Toplevel(self.master)
+        win.resizable(True, True)
+        videoPlayer(win)
+
+    # --- CAMBIAR TEMA (CLARO/OSCURO) ---
     def toggleTheme(self):
         global CURRENT_THEME
         CURRENT_THEME = "light" if CURRENT_THEME == "dark" else "dark"
         self.themeButton.config(text="🌙" if CURRENT_THEME == "dark" else "☀️")
         applyTheme(self.master, THEMES[CURRENT_THEME])
-        try:
-            if hasattr(self, "newWindow") and self.newWindow.winfo_exists():
-                applyTheme(self.newWindow, THEMES[CURRENT_THEME])
-        except Exception:
-            pass
 
-    def openMusicPlayer(self):
-        self.newWindow = tk.Toplevel(self.master)
-        self.app = musicPlayer(self.newWindow)
-       
+    # --- CENTRAR VENTANA EN PANTALLA ---
+    def centerWindow(self, w, h):
+        sw = self.master.winfo_screenwidth()
+        sh = self.master.winfo_screenheight()
+        x = (sw // 2) - (w // 2)
+        y = (sh // 2) - (h // 2)
+        self.master.geometry(f"{w}x{h}+{x}+{y}")
 
-    def openVideoPlayer(self):
-        self.newWindow = tk.Toplevel(self.master)
-        self.app = videoPlayer(self.newWindow)
-       
-
-    def center_window(self, width, height):
-        screen_width = self.master.winfo_screenwidth()
-        screen_height = self.master.winfo_screenheight()
-        x = (screen_width // 2) - (width // 2)
-        y = (screen_height // 2) - (height // 2)
-        self.master.geometry(f"{width}x{height}+{x}+{y}")
-        
 if __name__ == "__main__":
     root = tk.Tk()
-    app = mainApp(root)
+    init_styles(root)
+    mainApp(root)
     root.mainloop()
