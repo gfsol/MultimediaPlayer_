@@ -13,48 +13,46 @@ It includes:
 ## Requirements
 
 - **Windows** operating system (due to the use of `set_hwnd` for video output).  
-- **Python 3.10+**
+- **Python 3.8 or higher**
+- **VLC Media Player (64-bit recommended)**
 
-### Python packages
+### Python Libraries
+- python-vlc
 
-Installable via `pip`:
-
-- `python-vlc`  
-- Standard library modules:
-  - `tkinter`
-  - `threading`
-  - `time`
-  - `re`
-  - `tkinter.ttk`
-  - `tkinter.font`
-
-> Most Python for Windows installations include `tkinter` by default.
-
-### VLC
-
-This project uses **VLC Media Player** via `python-vlc` bindings.
-
-You must have:
-
-- **VLC Media Player** installed on your system  
-- `python-vlc` correctly linked to that installation
+> **Note:** `python-vlc` requires VLC Media Player to be installed on the system because it uses the `libvlc` library.
 
 ---
 
 ## Installation
 
-1. Download and Install **VLC Media Player**:  
-   <https://www.videolan.org/vlc/>
+### 1. Install Python
+Download and install Python from:
+https://www.python.org/downloads/
 
-2. Install Python dependency:
-
-   ```bash
-   pip install python-vlc
-   ```
-
-   If you're using a virtual environment, activate it before installing.
+Make sure to check **"Add Python to PATH"** during installation.
 
 ---
+
+### 2. Install VLC Media Player
+Download and install VLC Media Player from:
+https://www.videolan.org/vlc/
+
+ **Important**:
+- Python 64-bit → VLC 64-bit  
+- Python 32-bit → VLC 32-bit  
+
+Both must match to avoid runtime errors.
+
+---
+
+### 3. Install Python Dependencies
+All required Python libraries are listed in the `dependencies.txt` file.
+
+Run the following command from the project folder:
+
+```bash
+pip install -r dependencies.txt
+```
 
 ## Running the Application
 
