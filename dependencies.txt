@@ -1,0 +1,4 @@
+#  Python Multimedia Player Dependencies
+# Install: pip install -r dependencies.txt
+
+python-vlc
